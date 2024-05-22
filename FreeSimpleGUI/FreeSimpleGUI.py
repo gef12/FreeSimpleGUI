@@ -40,12 +40,33 @@ from typing import Dict  # noqa
 from typing import List  # noqa
 from typing import Tuple  # noqa
 
+#adicionando suport dnd actions
+# dnd actions
+PRIVATE = 'private'
+NONE = 'none'
+ASK = 'ask'
+COPY = 'copy'
+MOVE = 'move'
+LINK = 'link'
+REFUSE_DROP = 'refuse_drop'
+
+# dnd types
+DND_TEXT = 'DND_Text'
+DND_FILES = 'DND_Files'
+DND_ALL = '*'
+CF_UNICODETEXT = 'CF_UNICODETEXT'
+CF_TEXT = 'CF_TEXT'
+CF_HDROP = 'CF_HDROP'
+
+FileGroupDescriptor = 'FileGroupDescriptor - FileContents'# ??
+FileGroupDescriptorW = 'FileGroupDescriptorW - FileContents'# ??
 
 # get the tkinter detailed version
 tclversion_detailed = tkinter.Tcl().eval('info patchlevel')
 framework_version = tclversion_detailed
 
 version = __version__ = '5.1.0'
+TkdndVersion = None
 
 _change_log = ''
 
@@ -56,13 +77,17 @@ try:
 except:
     ver = ''
 
+
 # __version__ = version
 try:
     import webbrowser
-
+    import Tkinter as tkinter
+    import Tix as tix
     webbrowser_available = True
 except:
     webbrowser_available = False
+    import tkinter
+    from tkinter import tix
 
 
 port = 'FreeSimpleGUI'
@@ -626,6 +651,7 @@ BUTTON_DISABLED_MEANS_IGNORE = 'ignore'
 
 ELEM_TYPE_TEXT = 'text'
 ELEM_TYPE_INPUT_TEXT = 'input'
+ELEM_TYPE_INPUT_TEXT_DND = 'dndinput'
 ELEM_TYPE_INPUT_COMBO = 'combo'
 ELEM_TYPE_INPUT_OPTION_MENU = 'option menu'
 ELEM_TYPE_INPUT_RADIO = 'radio'
@@ -634,6 +660,7 @@ ELEM_TYPE_INPUT_CHECKBOX = 'checkbox'
 ELEM_TYPE_INPUT_SPIN = 'spind'
 ELEM_TYPE_BUTTON = 'button'
 ELEM_TYPE_IMAGE = 'image'
+ELEM_TYPE_IMAGE_DND = 'dndimage'
 ELEM_TYPE_CANVAS = 'canvas'
 ELEM_TYPE_FRAME = 'frame'
 ELEM_TYPE_GRAPH = 'graph'
@@ -719,6 +746,301 @@ DEFAULT_TTK_PART_MAPPING_DICT = {
 }
 
 ttk_part_mapping_dict = copy.copy(DEFAULT_TTK_PART_MAPPING_DICT)
+
+
+#dnd
+
+
+
+
+def _require(tkroot):
+    '''Internal function.'''
+    global TkdndVersion
+    try:
+        import os.path
+        import platform
+
+        if platform.system()=="Darwin" and platform.machine()=="arm64":
+            tkdnd_platform_rep = "osx-arm64"
+        elif platform.system()=="Darwin" and platform.machine()=="x86_64":
+            tkdnd_platform_rep = "osx-x64"
+        elif platform.system()=="Linux" and platform.machine()=="aarch64":
+            tkdnd_platform_rep = "linux-arm64"
+        elif platform.system()=="Linux" and platform.machine()=="x86_64":
+            tkdnd_platform_rep = "linux-x64"
+        elif platform.system()=="Windows" and platform.machine()=="ARM64":
+            tkdnd_platform_rep = "win-arm64"
+        elif platform.system()=="Windows" and platform.machine()=="AMD64":
+            #tkdnd_platform_rep = "tkdnd2.9.4"
+            tkdnd_platform_rep = "win-x64" 
+        else:
+            raise RuntimeError('Plaform not supported.')
+        
+        module_path = os.path.join(os.path.dirname(__file__), 'tkdnd', tkdnd_platform_rep)
+        print('module_path : ', module_path)
+        tkroot.tk.call('lappend', 'auto_path', module_path)
+        TkdndVersion = tkroot.tk.call('package', 'require', 'tkdnd')
+
+    except tkinter.TclError as e:
+        raise RuntimeError('Unable to load tkdnd library.' + e.message)
+    return TkdndVersion
+
+class DnDEvent:
+    """Internal class.
+    Container for the properties of a drag-and-drop event, similar to a
+    normal tkinter.Event.
+    An instance of the DnDEvent class has the following attributes:
+        action (string)
+        actions (tuple)
+        button (int)
+        code (string)
+        codes (tuple)
+        commonsourcetypes (tuple)
+        commontargettypes (tuple)
+        data (string)
+        name (string)
+        types (tuple)
+        modifiers (tuple)
+        supportedsourcetypes (tuple)
+        sourcetypes (tuple)
+        type (string)
+        supportedtargettypes (tuple)
+        widget (widget instance)
+        x_root (int)
+        y_root (int)
+    Depending on the type of DnD event however, not all attributes may be set.
+    """
+    pass
+
+class DnDWrapper:
+    '''Internal class.'''
+    # some of the percent substitutions need to be enclosed in braces
+    # so we can use splitlist() to convert them into tuples
+    _subst_format_dnd = ('%A', '%a', '%b', '%C', '%c', '{%CST}',
+                         '{%CTT}', '%D', '%e', '{%L}', '{%m}', '{%ST}',
+                         '%T', '{%t}', '{%TT}', '%W', '%X', '%Y')
+    _subst_format_str_dnd = " ".join(_subst_format_dnd)
+    tkinter.BaseWidget._subst_format_dnd = _subst_format_dnd
+    tkinter.BaseWidget._subst_format_str_dnd = _subst_format_str_dnd
+
+    def _substitute_dnd(self, *args):
+        """Internal function."""
+        if len(args) != len(self._subst_format_dnd):
+            return args
+        def getint_event(s):
+            try:
+                return int(s)
+            except ValueError:
+                return s
+        def splitlist_event(s):
+            try:
+                return self.tk.splitlist(s)
+            except ValueError:
+                return s
+        # valid percent substitutions for DnD event types
+        # (tested with tkdnd-2.8 on debian jessie):
+        # <<DragInitCmd>> : %W, %X, %Y %e, %t
+        # <<DragEndCmd>> : %A, %W, %e
+        # <<DropEnter>> : all except : %D (always empty)
+        # <<DropLeave>> : all except %D (always empty)
+        # <<DropPosition>> :all except %D (always empty)
+        # <<Drop>> : all
+        A, a, b, C, c, CST, CTT, D, e, L, m, ST, T, t, TT, W, X, Y = args
+        ev = DnDEvent()
+        ev.action = A
+        ev.actions = splitlist_event(a)
+        ev.button = getint_event(b)
+        ev.code = C
+        ev.codes = splitlist_event(c)
+        ev.commonsourcetypes = splitlist_event(CST)
+        ev.commontargettypes = splitlist_event(CTT)
+        ev.data = D
+        ev.name = e
+        ev.types = splitlist_event(L)
+        ev.modifiers = splitlist_event(m)
+        ev.supportedsourcetypes = splitlist_event(ST)
+        ev.sourcetypes = splitlist_event(t)
+        ev.type = T
+        ev.supportedtargettypes = splitlist_event(TT)
+        try:
+            ev.widget = self.nametowidget(W)
+        except KeyError:
+            ev.widget = W
+        ev.x_root = getint_event(X)
+        ev.y_root = getint_event(Y)
+        return (ev,)
+    tkinter.BaseWidget._substitute_dnd = _substitute_dnd
+
+    def _dnd_bind(self, what, sequence, func, add, needcleanup=True):
+        """Internal function."""
+        if isinstance(func, str):
+            self.tk.call(what + (sequence, func))
+        elif func:
+            funcid = self._register(func, self._substitute_dnd, needcleanup)
+            # FIXME: why doesn't the "return 'break'" mechanism work here??
+            #cmd = ('%sif {"[%s %s]" == "break"} break\n' % (add and '+' or '',
+            #                              funcid, self._subst_format_str_dnd))
+            cmd = '%s%s %s' %(add and '+' or '', funcid,
+                                    self._subst_format_str_dnd)
+            self.tk.call(what + (sequence, cmd))
+            return funcid
+        elif sequence:
+            return self.tk.call(what + (sequence,))
+        else:
+            return self.tk.splitlist(self.tk.call(what))
+    tkinter.BaseWidget._dnd_bind = _dnd_bind
+
+    def dnd_bind(self, sequence=None, func=None, add=None):
+        '''Bind to this widget at drag and drop event SEQUENCE a call
+        to function FUNC.
+        SEQUENCE may be one of the following:
+        <<DropEnter>>, <<DropPosition>>, <<DropLeave>>, <<Drop>>,
+        <<Drop:type>>, <<DragInitCmd>>, <<DragEndCmd>> .
+        The callbacks for the <Drop*>> events, with the exception of
+        <<DropLeave>>, should always return an action (i.e. one of COPY,
+        MOVE, LINK, ASK or PRIVATE).
+        The callback for the <<DragInitCmd>> event must return a tuple
+        containing three elements: the drop action(s) supported by the
+        drag source, the format type(s) that the data can be dropped as and
+        finally the data that shall be dropped. Each of these three elements
+        may be a tuple of strings or a single string.'''
+        return self._dnd_bind(('bind', self._w), sequence, func, add)
+    tkinter.BaseWidget.dnd_bind = dnd_bind
+
+    def drag_source_register(self, button=None, *dndtypes):
+        '''This command will register SELF as a drag source.
+        A drag source is a widget than can start a drag action. This command
+        can be executed multiple times on a widget.
+        When SELF is registered as a drag source, optional DNDTYPES can be
+        provided. These DNDTYPES will be provided during a drag action, and
+        it can contain platform independent or platform specific types.
+        Platform independent are DND_Text for dropping text portions and
+        DND_Files for dropping a list of files (which can contain one or
+        multiple files) on SELF. However, these types are
+        indicative/informative. SELF can initiate a drag action with even a
+        different type list. Finally, button is the mouse button that will be
+        used for starting the drag action. It can have any of the values 1
+        (left mouse button), 2 (middle mouse button - wheel) and 3
+        (right mouse button). If button is not specified, it defaults to 1.'''
+        # hack to fix a design bug from the first version
+        if button is None:
+            button = 1
+        else:
+            try:
+                button = int(button)
+            except ValueError:
+                # no button defined, button is actually
+                # something like DND_TEXT
+                dndtypes = (button,) + dndtypes
+                button = 1
+        self.tk.call(
+                'tkdnd::drag_source', 'register', self._w, dndtypes, button)
+    tkinter.BaseWidget.drag_source_register = drag_source_register
+
+    def drag_source_unregister(self):
+        '''This command will stop SELF from being a drag source. Thus, window
+        will stop receiving events related to drag operations. It is an error
+        to use this command for a window that has not been registered as a
+        drag source with drag_source_register().'''
+        self.tk.call('tkdnd::drag_source', 'unregister', self._w)
+    tkinter.BaseWidget.drag_source_unregister = drag_source_unregister
+
+    def drop_target_register(self, *dndtypes):
+        '''This command will register SELF as a drop target. A drop target is
+        a widget than can accept a drop action. This command can be executed
+        multiple times on a widget. When SELF is registered as a drop target,
+        optional DNDTYPES can be provided. These types list can contain one or
+        more types that SELF will accept during a drop action, and it can
+        contain platform independent or platform specific types. Platform
+        independent are DND_Text for dropping text portions and DND_Files for
+        dropping a list of files (which can contain one or multiple files) on
+        SELF.'''
+        self.tk.call('tkdnd::drop_target', 'register', self._w, dndtypes)
+    tkinter.BaseWidget.drop_target_register = drop_target_register
+
+    def drop_target_unregister(self):
+        '''This command will stop SELF from being a drop target. Thus, SELF
+        will stop receiving events related to drop operations. It is an error
+        to use this command for a window that has not been registered as a
+        drop target with drop_target_register().'''
+        self.tk.call('tkdnd::drop_target', 'unregister', self._w)
+    tkinter.BaseWidget.drop_target_unregister = drop_target_unregister
+
+    def platform_independent_types(self, *dndtypes):
+        '''This command will accept a list of types that can contain platform
+        independnent or platform specific types. A new list will be returned,
+        where each platform specific type in DNDTYPES will be substituted by
+        one or more platform independent types. Thus, the returned list may
+        have more elements than DNDTYPES.'''
+        return self.tk.split(self.tk.call(
+                            'tkdnd::platform_independent_types', dndtypes))
+    tkinter.BaseWidget.platform_independent_types = platform_independent_types
+
+    def platform_specific_types(self, *dndtypes):
+        '''This command will accept a list of types that can contain platform
+        independnent or platform specific types. A new list will be returned,
+        where each platform independent type in DNDTYPES will be substituted
+        by one or more platform specific types. Thus, the returned list may
+        have more elements than DNDTYPES.'''
+        return self.tk.split(self.tk.call(
+                            'tkdnd::platform_specific_types', dndtypes))
+    tkinter.BaseWidget.platform_specific_types = platform_specific_types
+
+    def get_dropfile_tempdir(self):
+        '''This command will return the temporary directory used by TkDND for
+        storing temporary files. When the package is loaded, this temporary
+        directory will be initialised to a proper directory according to the
+        operating system. This default initial value can be changed to be the
+        value of the following environmental variables:
+        TKDND_TEMP_DIR, TEMP, TMP.'''
+        return self.tk.call('tkdnd::GetDropFileTempDirectory')
+    tkinter.BaseWidget.get_dropfile_tempdir = get_dropfile_tempdir
+
+    def set_dropfile_tempdir(self, tempdir):
+        '''This command will change the temporary directory used by TkDND for
+        storing temporary files to TEMPDIR.'''
+        self.tk.call('tkdnd::SetDropFileTempDirectory', tempdir)
+    tkinter.BaseWidget.set_dropfile_tempdir = set_dropfile_tempdir
+
+#######################################################################
+####      The main window classes that enable Drag & Drop for      ####
+####      themselves and all their descendant widgets:             ####
+#######################################################################
+
+class Tk(tkinter.Tk, DnDWrapper):
+    '''Creates a new instance of a tkinter.Tk() window; all methods of the
+    DnDWrapper class apply to this window and all its descendants.'''
+    def __init__(self, *args, **kw):
+        tkinter.Tk.__init__(self, *args, **kw)
+        if TkdndVersion is None :
+            self.TkdndVersion = _require(self)
+            print('version tkdnd : ',self.TkdndVersion)
+
+class TixTk(tix.Tk, DnDWrapper):
+    '''Creates a new instance of a tix.Tk() window; all methods of the
+    DnDWrapper class apply to this window and all its descendants.'''
+    def __init__(self, *args, **kw):
+        tix.Tk.__init__(self, *args, **kw)
+        self.TkdndVersion = _require(self)
+
+
+
+
+
+
+
+
+
+#dnd
+
+
+
+
+
+
+
+
+
 
 
 class TTKPartOverrides:
@@ -892,6 +1214,7 @@ class Element:
         background_color=None,
         text_color=None,
         key=None,
+		key_dnd=None,
         pad=None,
         tooltip=None,
         visible=True,
@@ -2007,7 +2330,7 @@ class Input(Element):
         self.ReadOnly = readonly
         self.BorderWidth = border_width if border_width is not None else DEFAULT_BORDER_WIDTH
         self.TKEntry = self.Widget = None  # type: tk.Entry
-        key = key if key is not None else k
+        key = key if key is not None else k 
         sz = size if size != (None, None) else s
         pad = pad if pad is not None else p
         self.expand_x = expand_x
@@ -2023,7 +2346,7 @@ class Input(Element):
             font=font,
             tooltip=tooltip,
             visible=visible,
-            metadata=metadata,
+            metadata=metadata
         )
 
     def update(
@@ -2184,6 +2507,200 @@ class Input(Element):
 In = Input
 InputText = Input
 I = Input  # noqa
+
+# ---------------------------------------------------------------------- #
+#                           Input Class                                  #
+# ---------------------------------------------------------------------- #
+class DnDInput(Element):
+    """
+    Display a single text input field.  Based on the tkinter Widget `Entry`
+    """
+
+    def __init__(self, default_text='', size=(None, None), s=(None, None), disabled=False, password_char='',
+                 justification=None, background_color=None, text_color=None, font=None, tooltip=None, border_width=None,
+                 change_submits=False, enable_events=False, do_not_clear=True, key=None, k=None, focus=False, pad=None, p=None,
+                 use_readonly_for_disable=True, readonly=False, disabled_readonly_background_color=None, disabled_readonly_text_color=None, expand_x=False, expand_y=False,
+                 right_click_menu=None, visible=True, metadata=None, is_dnd=False, key_dnd=None):
+        """
+        :param default_text:                       Text initially shown in the input box as a default value(Default value = ''). Will automatically be converted to string
+        :type default_text:                        (Any)
+        :param size:                               w=characters-wide, h=rows-high. If an int is supplied rather than a tuple, then a tuple is created width=int supplied and heigh=1
+        :type size:                                (int, int) |  (int, None) | int
+        :param s:                                  Same as size parameter.  It's an alias. If EITHER of them are set, then the one that's set will be used. If BOTH are set, size will be used
+        :type s:                                   (int, int)  | (None, None) | int
+        :param disabled:                           set disable state for element (Default = False)
+        :type disabled:                            (bool)
+        :param password_char:                      Password character if this is a password field (Default value = '')
+        :type password_char:                       (char)
+        :param justification:                      justification for data display. Valid choices - left, right, center
+        :type justification:                       (str)
+        :param background_color:                   color of background in one of the color formats
+        :type background_color:                    (str)
+        :param text_color:                         color of the text
+        :type text_color:                          (str)
+        :param font:                               specifies the font family, size. Tuple or Single string format 'name size styles'. Styles: italic * roman bold normal underline overstrike
+        :type font:                                (str or (str, int[, str]) or None)
+        :param tooltip:                            text, that will appear when mouse hovers over the element
+        :type tooltip:                             (str)
+        :param border_width:                       width of border around element in pixels
+        :type border_width:                        (int)
+        :param change_submits:                     * DEPRICATED DO NOT USE. Use `enable_events` instead
+        :type change_submits:                      (bool)
+        :param enable_events:                      If True then changes to this element are immediately reported as an event. Use this instead of change_submits (Default = False)
+        :type enable_events:                       (bool)
+        :param do_not_clear:                       If False then the field will be set to blank after ANY event (button, any event) (Default = True)
+        :type do_not_clear:                        (bool)
+        :param key:                                Value that uniquely identifies this element from all other elements. Used when Finding an element or in return values. Must be unique to the window
+        :type key:                                 str | int | tuple | object
+        :param k:                                  Same as the Key. You can use either k or key. Which ever is set will be used.
+        :type k:                                   str | int | tuple | object
+        :param focus:                              Determines if initial focus should go to this element.
+        :type focus:                               (bool)
+        :param pad:                                Amount of padding to put around element. Normally (horizontal pixels, vertical pixels) but can be split apart further into ((horizontal left, horizontal right), (vertical above, vertical below)). If int is given, then converted to tuple (int, int) with the value provided duplicated
+        :type pad:                                 (int, int) or ((int, int),(int,int)) or (int,(int,int)) or  ((int, int),int) | int
+        :param p:                                  Same as pad parameter.  It's an alias. If EITHER of them are set, then the one that's set will be used. If BOTH are set, pad will be used
+        :type p:                                   (int, int) or ((int, int),(int,int)) or (int,(int,int)) or  ((int, int),int) | int
+        :param use_readonly_for_disable:           If True (the default) tkinter state set to 'readonly'. Otherwise state set to 'disabled'
+        :type use_readonly_for_disable:            (bool)
+        :param readonly:                           If True tkinter state set to 'readonly'.  Use this in place of use_readonly_for_disable as another way of achieving readonly.  Note cannot set BOTH readonly and disabled as tkinter only supplies a single flag
+        :type readonly:                            (bool)
+        :param disabled_readonly_background_color: If state is set to readonly or disabled, the color to use for the background
+        :type disabled_readonly_background_color:  (str)
+        :param disabled_readonly_text_color:       If state is set to readonly or disabled, the color to use for the text
+        :type disabled_readonly_text_color:        (str)
+        :param expand_x:                           If True the element will automatically expand in the X direction to fill available space
+        :type expand_x:                            (bool)
+        :param expand_y:                           If True the element will automatically expand in the Y direction to fill available space
+        :type expand_y:                            (bool)
+        :param right_click_menu:                   A list of lists of Menu items to show when this element is right clicked. See user docs for exact format.
+        :type right_click_menu:                    List[List[ List[str] | str ]]
+        :param visible:                            set visibility state of the element (Default = True)
+        :type visible:                             (bool)
+        :param metadata:                           User metadata that can be set to ANYTHING
+        :type metadata:                            (Any)
+        """
+
+
+        self.DefaultText = default_text if default_text is not None else ''
+        self.PasswordCharacter = password_char
+        bg = background_color if background_color is not None else DEFAULT_INPUT_ELEMENTS_COLOR
+        fg = text_color if text_color is not None else DEFAULT_INPUT_TEXT_COLOR
+        self.Focus = focus
+        self.is_dnd = is_dnd
+        self.do_not_clear = do_not_clear
+        self.Justification = justification
+        self.Disabled = disabled
+        self.ChangeSubmits = change_submits or enable_events
+        self.RightClickMenu = right_click_menu
+        self.UseReadonlyForDisable = use_readonly_for_disable
+        self.disabled_readonly_background_color = disabled_readonly_background_color
+        self.disabled_readonly_text_color = disabled_readonly_text_color
+        self.ReadOnly = readonly
+        self.BorderWidth = border_width if border_width is not None else DEFAULT_BORDER_WIDTH
+        self.TKEntry = self.Widget = None  # type: tk.Entry
+        key = key if key is not None else k
+        key_dnd = key_dnd
+        sz = size if size != (None, None) else s
+        pad = pad if pad is not None else p
+        self.expand_x = expand_x
+        self.expand_y = expand_y
+
+        super().__init__(ELEM_TYPE_INPUT_TEXT_DND, size=sz, background_color=bg, text_color=fg, key=key, pad=pad,
+                         font=font, tooltip=tooltip, visible=visible, metadata=metadata, key_dnd=key_dnd)
+
+    def update(self, value=None, disabled=None, select=None, visible=None, text_color=None, background_color=None, move_cursor_to='end', password_char=None, paste=None):
+        """
+        Changes some of the settings for the Input Element. Must call `Window.Read` or `Window.Finalize` prior.
+        Changes will not be visible in your window until you call window.read or window.refresh.
+
+        If you change visibility, your element may MOVE. If you want it to remain stationary, use the "layout helper"
+        function "pin" to ensure your element is "pinned" to that location in your layout so that it returns there
+        when made visible.
+
+        :param value:            new text to display as default text in Input field
+        :type value:             (str)
+        :param disabled:         disable or enable state of the element (sets Entry Widget to readonly or normal)
+        :type disabled:          (bool)
+        :param select:           if True, then the text will be selected
+        :type select:            (bool)
+        :param visible:          change visibility of element
+        :type visible:           (bool)
+        :param text_color:       change color of text being typed
+        :type text_color:        (str)
+        :param background_color: change color of the background
+        :type background_color:  (str)
+        :param move_cursor_to:   Moves the cursor to a particular offset. Defaults to 'end'
+        :type move_cursor_to:    int | str
+        :param password_char:    Password character if this is a password field
+        :type password_char:     str
+        :param paste:            If True "Pastes" the value into the element rather than replacing the entire element. If anything is selected it is replaced. The text is inserted at the current cursor location.
+        :type paste:             bool
+        """
+        if not self._widget_was_created():  # if widget hasn't been created yet, then don't allow
+            return
+        if disabled is True:
+            self.TKEntry['state'] = 'readonly' if self.UseReadonlyForDisable else 'disabled'
+        elif disabled is False:
+            self.TKEntry['state'] = 'readonly' if self.ReadOnly else 'normal'
+        self.Disabled = disabled if disabled is not None else self.Disabled
+
+        if background_color not in (None, COLOR_SYSTEM_DEFAULT):
+            self.TKEntry.configure(background=background_color)
+        if text_color not in (None, COLOR_SYSTEM_DEFAULT):
+            self.TKEntry.configure(fg=text_color)
+        if value is not None:
+            if paste is not True:
+                try:
+                    self.TKStringVar.set(value)
+                except:
+                    pass
+            self.DefaultText = value
+            if paste is True:
+                try:
+                    self.TKEntry.delete('sel.first', 'sel.last')
+                except:
+                    pass
+                self.TKEntry.insert("insert", value)
+            if move_cursor_to == 'end':
+                self.TKEntry.icursor(tk.END)
+            elif move_cursor_to is not None:
+                self.TKEntry.icursor(move_cursor_to)
+        if select:
+            self.TKEntry.select_range(0, 'end')
+        if visible is False:
+            self._pack_forget_save_settings()
+            # self.TKEntry.pack_forget()
+        elif visible is True:
+            self._pack_restore_settings()
+            # self.TKEntry.pack(padx=self.pad_used[0], pady=self.pad_used[1])
+            # self.TKEntry.pack(padx=self.pad_used[0], pady=self.pad_used[1], in_=self.ParentRowFrame)
+        if visible is not None:
+            self._visible = visible
+        if password_char is not None:
+            self.TKEntry.configure(show=password_char)
+            self.PasswordCharacter = password_char
+
+    def get(self):
+        """
+        Read and return the current value of the input element. Must call `Window.Read` or `Window.Finalize` prior
+
+        :return: current value of Input field or '' if error encountered
+        :rtype:  (str)
+        """
+        try:
+            text = self.TKStringVar.get()
+        except:
+            text = ''
+        return text
+
+    Get = get
+    Update = update
+
+
+InDnD = DnDInput
+InputTextDnD = InDnD
+IDnD = InDnD
+
 
 
 # ---------------------------------------------------------------------- #
@@ -6568,6 +7085,296 @@ class Image(Element):
 
 
 Im = Image
+
+# ---------------------------------------------------------------------- #
+#                           Image                                        #
+# ---------------------------------------------------------------------- #
+class DnDImage(Element):
+    """
+    Image Element - show an image in the window. Should be a GIF or a PNG only
+    """
+
+    def __init__(self, source=None, filename=None, data=None, background_color=None, size=(None, None), s=(None, None), pad=None, p=None, key=None, k=None, tooltip=None, subsample=None, right_click_menu=None, expand_x=False, expand_y=False, visible=True, enable_events=False, metadata=None, link_img=None):
+        """
+        :param source:           A filename or a base64 bytes. Will automatically detect the type and fill in filename or data for you.
+        :type source:            str | bytes | None
+        :param filename:         image filename if there is a button image. GIFs and PNGs only.
+        :type filename:          str | None
+        :param data:             Raw or Base64 representation of the image to put on button. Choose either filename or data
+        :type data:              bytes | str | None
+        :param background_color: color of background
+        :type background_color:
+        :param size:             (width, height) size of image in pixels
+        :type size:              (int, int)
+        :param s:                Same as size parameter.  It's an alias. If EITHER of them are set, then the one that's set will be used. If BOTH are set, size will be used
+        :type s:                 (int, int)  | (None, None) | int
+        :param pad:              Amount of padding to put around element in pixels (left/right, top/bottom) or ((left, right), (top, bottom)) or an int. If an int, then it's converted into a tuple (int, int)
+        :type pad:               (int, int) or ((int, int),(int,int)) or (int,(int,int)) or  ((int, int),int) | int
+        :param p:                Same as pad parameter.  It's an alias. If EITHER of them are set, then the one that's set will be used. If BOTH are set, pad will be used
+        :type p:                 (int, int) or ((int, int),(int,int)) or (int,(int,int)) or  ((int, int),int) | int
+        :param key:              Used with window.find_element and with return values to uniquely identify this element to uniquely identify this element
+        :type key:               str | int | tuple | object
+        :param k:                Same as the Key. You can use either k or key. Which ever is set will be used.
+        :type k:                 str | int | tuple | object
+        :param tooltip:          text, that will appear when mouse hovers over the element
+        :type tooltip:           (str)
+        :param subsample:        amount to reduce the size of the image. Divides the size by this number. 2=1/2, 3=1/3, 4=1/4, etc
+        :type subsample:         (int)
+        :param right_click_menu: A list of lists of Menu items to show when this element is right clicked. See user docs for exact format.
+        :type right_click_menu:  List[List[ List[str] | str ]]
+        :param expand_x:         If True the element will automatically expand in the X direction to fill available space
+        :type expand_x:          (bool)
+        :param expand_y:         If True the element will automatically expand in the Y direction to fill available space
+        :type expand_y:          (bool)
+        :param visible:          set visibility state of the element
+        :type visible:           (bool)
+        :param enable_events:    Turns on the element specific events. For an Image element, the event is "image clicked"
+        :type enable_events:     (bool)
+        :param metadata:         User metadata that can be set to ANYTHING
+        :type metadata:          (Any)
+        """
+
+        if source is not None:
+            if isinstance(source, bytes):
+                data = source
+            elif isinstance(source, str):
+                filename = source
+            else:
+                warnings.warn('Image element - source is not a valid type: {}'.format(type(source)), UserWarning)
+
+        self.Filename = filename
+        self.LinkImg = link_img
+        self.Data = data
+        self.Widget = self.tktext_label = None  # type: tk.Label
+        self.BackgroundColor = background_color
+        if data is None and filename is None:
+            self.Filename = ''
+        self.EnableEvents = enable_events
+        self.RightClickMenu = right_click_menu
+        self.AnimatedFrames = None
+        self.CurrentFrameNumber = 0
+        self.TotalAnimatedFrames = 0
+        self.LastFrameTime = 0
+        self.ImageSubsample = subsample
+
+        self.Source = filename if filename is not None else data
+        key = key if key is not None else k
+        sz = size if size != (None, None) else s
+        pad = pad if pad is not None else p
+        self.expand_x = expand_x
+        self.expand_y = expand_y
+
+        super().__init__(ELEM_TYPE_IMAGE_DND, size=sz, background_color=background_color, pad=pad, key=key,
+                         tooltip=tooltip, visible=visible, metadata=metadata)
+        return
+
+    def update(self, source=None, filename=None, data=None, size=(None, None), subsample=None, visible=None):
+        """
+        Changes some of the settings for the Image Element. Must call `Window.Read` or `Window.Finalize` prior.
+        To clear an image that's been displayed, call with NONE of the options set.  A blank update call will
+        delete the previously shown image.
+
+        Changes will not be visible in your window until you call window.read or window.refresh.
+
+        If you change visibility, your element may MOVE. If you want it to remain stationary, use the "layout helper"
+        function "pin" to ensure your element is "pinned" to that location in your layout so that it returns there
+        when made visible.
+
+        :param source:   A filename or a base64 bytes. Will automatically detect the type and fill in filename or data for you.
+        :type source:    str | bytes | None
+        :param filename: filename to the new image to display.
+        :type filename:  (str)
+        :param data:     Base64 encoded string OR a tk.PhotoImage object
+        :type data:      str | tkPhotoImage
+        :param size:     (width, height) size of image in pixels
+        :type size:      Tuple[int,int]
+        :param subsample:  amount to reduce the size of the image. Divides the size by this number. 2=1/2, 3=1/3, 4=1/4, etc
+        :type subsample:   (int)
+        :param visible:  control visibility of element
+        :type visible:   (bool)
+        """
+
+        if not self._widget_was_created():  # if widget hasn't been created yet, then don't allow
+            return
+
+        if source is not None:
+            if isinstance(source, bytes):
+                data = source
+            elif isinstance(source, str):
+                filename = source
+            else:
+                warnings.warn('Image element - source is not a valid type: {}'.format(type(source)), UserWarning)
+
+        image = None
+        if filename is not None:
+            try:
+                image = tk.PhotoImage(file=filename)
+                if subsample is not None:
+                    image = image.subsample(subsample)
+            except Exception as e:
+                _error_popup_with_traceback('Exception updating Image element', e)
+
+        elif data is not None:
+            # if type(data) is bytes:
+            try:
+                image = tk.PhotoImage(data=data)
+                if subsample is not None:
+                    image = image.subsample(subsample)
+            except Exception as e:
+                image = data
+                # return  # an error likely means the window has closed so exit
+
+        if image is not None:
+            if type(image) is not bytes:
+                width, height = size[0] if size[0] is not None else image.width(), size[1] if size[1] is not None else image.height()
+            else:
+                width, height = size
+            try:  # sometimes crashes if user closed with X
+                self.tktext_label.configure(image=image, width=width, height=height)
+            except Exception as e:
+                _error_popup_with_traceback('Exception updating Image element', e)
+            self.tktext_label.image = image
+        if visible is False:
+            self._pack_forget_save_settings()
+        elif visible is True:
+            self._pack_restore_settings()
+
+        # if everything is set to None, then delete the image
+        if filename is None and image is None and visible is None and size == (None, None):
+            # Using a try because the image may have been previously deleted and don't want an error if that's happened
+            try:
+                self.tktext_label.configure(width=1, height=1, bd=0)
+                self.tktext_label.image = None
+            except:
+                pass
+
+        if visible is not None:
+            self._visible = visible
+
+    def update_animation(self, source, time_between_frames=0):
+        """
+        Show an Animated GIF. Call the function as often as you like. The function will determine when to show the next frame and will automatically advance to the next frame at the right time.
+        NOTE - does NOT perform a sleep call to delay
+        :param source:              Filename or Base64 encoded string containing Animated GIF
+        :type source:               str | bytes | None
+        :param time_between_frames: Number of milliseconds to wait between showing frames
+        :type time_between_frames:  (int)
+        """
+
+        if self.Source != source:
+            self.AnimatedFrames = None
+            self.Source = source
+
+        if self.AnimatedFrames is None:
+            self.TotalAnimatedFrames = 0
+            self.AnimatedFrames = []
+            # Load up to 1000 frames of animation.  stops when a bad frame is returns by tkinter
+            for i in range(1000):
+                if type(source) is not bytes:
+                    try:
+                        self.AnimatedFrames.append(tk.PhotoImage(file=source, format='gif -index %i' % (i)))
+                    except Exception as e:
+                        break
+                else:
+                    try:
+                        self.AnimatedFrames.append(tk.PhotoImage(data=source, format='gif -index %i' % (i)))
+                    except Exception as e:
+                        break
+            self.TotalAnimatedFrames = len(self.AnimatedFrames)
+            self.LastFrameTime = time.time()
+            self.CurrentFrameNumber = -1  # start at -1 because it is incremented before every frame is shown
+        # show the frame
+
+        now = time.time()
+
+        if time_between_frames:
+            if (now - self.LastFrameTime) * 1000 > time_between_frames:
+                self.LastFrameTime = now
+                self.CurrentFrameNumber = (self.CurrentFrameNumber + 1) % self.TotalAnimatedFrames
+            else:  # don't reshow the frame again if not time for new frame
+                return
+        else:
+            self.CurrentFrameNumber = (self.CurrentFrameNumber + 1) % self.TotalAnimatedFrames
+        image = self.AnimatedFrames[self.CurrentFrameNumber]
+        try:  # needed in case the window was closed with an "X"
+            self.tktext_label.configure(image=image, width=image.width(), heigh=image.height())
+        except Exception as e:
+            print('Exception in update_animation', e)
+
+
+    def update_animation_no_buffering(self, source, time_between_frames=0):
+        """
+        Show an Animated GIF. Call the function as often as you like. The function will determine when to show the next frame and will automatically advance to the next frame at the right time.
+        NOTE - does NOT perform a sleep call to delay
+
+        :param source:              Filename or Base64 encoded string containing Animated GIF
+        :type source:               str | bytes
+        :param time_between_frames: Number of milliseconds to wait between showing frames
+        :type time_between_frames:  (int)
+        """
+
+        if self.Source != source:
+            self.AnimatedFrames = None
+            self.Source = source
+            self.frame_num = 0
+
+        now = time.time()
+
+        if time_between_frames:
+            if (now - self.LastFrameTime) * 1000 > time_between_frames:
+                self.LastFrameTime = now
+            else:  # don't reshow the frame again if not time for new frame
+                return
+
+        # read a frame
+        while True:
+            if type(source) is not bytes:
+                try:
+                    self.image = tk.PhotoImage(file=source, format='gif -index %i' % (self.frame_num))
+                    self.frame_num += 1
+                except:
+                    self.frame_num = 0
+            else:
+                try:
+                    self.image = tk.PhotoImage(data=source, format='gif -index %i' % (self.frame_num))
+                    self.frame_num += 1
+                except:
+                    self.frame_num = 0
+            if self.frame_num:
+                break
+
+        try:  # needed in case the window was closed with an "X"
+            self.tktext_label.configure(image=self.image, width=self.image.width(), heigh=self.image.height())
+
+        except:
+            pass
+
+    def get(self):
+        """
+        Read and return the current value of the input element. Must call `Window.Read` or `Window.Finalize` prior
+
+        :return: current value of Input field or '' if error encountered
+        :rtype:  (str)
+        """
+        try:
+            text = self.LinkImg
+        except:
+            text = ''
+        return text
+    def setLinkImg(self, link=None):
+        try:
+            self.LinkImg = link
+        except:
+           self.LinkImg = None
+    SetLinkImg = setLinkImg
+    Get = get
+    Update = update
+    UpdateAnimation = update_animation
+
+
+ImDnD = DnDImage
+
+
 
 
 # ---------------------------------------------------------------------- #
@@ -12147,6 +12954,7 @@ class Window:
                         ELEM_TYPE_INPUT_SLIDER,
                         ELEM_TYPE_GRAPH,
                         ELEM_TYPE_IMAGE,
+                        ELEM_TYPE_IMAGE_DND,
                         ELEM_TYPE_INPUT_CHECKBOX,
                         ELEM_TYPE_INPUT_LISTBOX,
                         ELEM_TYPE_INPUT_COMBO,
@@ -12155,6 +12963,7 @@ class Window:
                         ELEM_TYPE_INPUT_SPIN,
                         ELEM_TYPE_INPUT_RADIO,
                         ELEM_TYPE_INPUT_TEXT,
+                        ELEM_TYPE_INPUT_TEXT_DND,
                         ELEM_TYPE_PROGRESS_BAR,
                         ELEM_TYPE_TABLE,
                         ELEM_TYPE_TREE,
@@ -17051,6 +17860,13 @@ def _BuildResultsForSubform(form, initialize_only, top_level_form):
                         value = ''
                     if not top_level_form.NonBlocking and not element.do_not_clear and not top_level_form.ReturnKeyboardEvents:
                         element.TKStringVar.set('')
+                elif element.Type == ELEM_TYPE_INPUT_TEXT_DND:
+                    try:
+                        value = element.TKStringVar.get()
+                    except:
+                        value = ''
+                    if not top_level_form.NonBlocking and not element.do_not_clear and not top_level_form.ReturnKeyboardEvents:
+                        element.TKStringVar.set('')
                 elif element.Type == ELEM_TYPE_INPUT_CHECKBOX:
                     value = element.TKIntVar.get()
                     value = value != 0
@@ -17157,6 +17973,7 @@ def _BuildResultsForSubform(form, initialize_only, top_level_form):
                 ELEM_TYPE_BUTTON,
                 ELEM_TYPE_TEXT,
                 ELEM_TYPE_IMAGE,
+                ELEM_TYPE_IMAGE_DND,
                 ELEM_TYPE_OUTPUT,
                 ELEM_TYPE_PROGRESS_BAR,
                 ELEM_TYPE_COLUMN,
@@ -17264,6 +18081,10 @@ def _FindElementWithFocusInSubForm(form):
                 if matching_elem is not None:
                     return matching_elem
             elif element.Type == ELEM_TYPE_INPUT_TEXT:
+                if element.TKEntry is not None:
+                    if element.TKEntry is element.TKEntry.focus_get():
+                        return element
+            elif element.Type == ELEM_TYPE_INPUT_TEXT_DND:
                 if element.TKEntry is not None:
                     if element.TKEntry is element.TKEntry.focus_get():
                         return element
@@ -18561,6 +19382,98 @@ def PackFormIntoFrame(form, containing_frame, toplevel_form):
 
                 # row_should_expand = True
 
+            # -------------------------  INPUT placement element  ------------------------- #
+            elif element_type == ELEM_TYPE_INPUT_TEXT_DND:
+                #print('entrou')
+                def drop(event, el, var_const, key):
+                    print(vars()['key'])
+                    #var_update
+                    var_const.set(event.data)
+                   
+                    #g['var_const_%s' % key].set(event.data)
+                    #el.delete(0, tk.END)
+                    #el.insert(0, event.data)
+                    #print(el, event.data)
+                    return 
+
+                def handle(event):
+                    event.widget.delete(0, tk.END)
+                    event.widget.insert(0, event.data)
+
+                element = element  # type: InputText
+                key = element.key
+
+    
+                default_text = element.DefaultText
+
+                if element.is_dnd:
+                    var_const = element.TKStringVar = tk.StringVar()
+                else:
+                    element.TKStringVar = tk.StringVar()
+                #element.TKStringVar = tk.StringVar()
+                element.TKStringVar.set(default_text)
+                show = element.PasswordCharacter if element.PasswordCharacter else ""
+                bd = border_depth
+                if element.Justification is not None:
+                    justification = element.Justification
+                else:
+                    justification = DEFAULT_TEXT_JUSTIFICATION
+                justify = tk.LEFT if justification.startswith('l') else tk.CENTER if justification.startswith('c') else tk.RIGHT
+                # anchor = tk.NW if justification == 'left' else tk.N if justification == 'center' else tk.NE
+            
+                el = element.TKEntry = element.Widget = tk.Entry(tk_row_frame, width=element_size[0],
+                                                            textvariable=var_const if element.is_dnd else element.TKStringVar, bd=bd,
+                                                            font=font, show=show, justify=justify)
+                #print(str(key))
+                #vars()[str(key)] = el
+                if element.ChangeSubmits:
+                    #print(element.is_dnd, element)
+                    element.TKEntry.bind('<Key>', element._KeyboardHandler)
+                    element.TKEntry.drop_target_register(DND_FILES)
+                    #element.TKEntry.dnd_bind(el, handle, 'text/uri-list')
+                    #element.TKEntry.dnd_bind('<<Drop>>', lambda e: drop(e, el, var_const, element._KeyboardHandler))
+                    element.TKEntry.dnd_bind('<<Drop>>', lambda e: handle(e))
+                    #element.TKEntry.dnd_bind('<Return>', element._ReturnKeyHandler)
+                    
+                element.TKEntry.bind('<Return>', element._ReturnKeyHandler)
+                element.TKEntry.dnd_bind('<Return>', element._ReturnKeyHandler)
+            
+                
+
+                if element.BackgroundColor is not None and element.BackgroundColor != COLOR_SYSTEM_DEFAULT:
+                    element.TKEntry.configure(background=element.BackgroundColor, selectforeground=element.BackgroundColor)
+                if text_color is not None and text_color != COLOR_SYSTEM_DEFAULT:
+                    element.TKEntry.configure(fg=text_color, selectbackground=text_color)
+
+                if element.disabled_readonly_background_color is not None:
+                    element.TKEntry.config(readonlybackground=element.disabled_readonly_background_color)
+                if element.disabled_readonly_text_color is not None:
+                    element.TKEntry.config(fg=element.disabled_readonly_text_color)
+
+                element.Widget.config(highlightthickness=0)
+                # element.pack_keywords = {'side':tk.LEFT, 'padx':elementpad[0], 'pady':elementpad[1], 'expand':False, 'fill':tk.NONE }
+                # element.TKEntry.pack(**element.pack_keywords)
+                expand, fill, row_should_expand, row_fill_direction = _add_expansion(element, row_should_expand, row_fill_direction)
+                element.TKEntry.pack(side=tk.LEFT, padx=elementpad[0], pady=elementpad[1], expand=expand, fill=fill)
+                if element.visible is False:
+                    element._pack_forget_save_settings()
+                    # element.TKEntry.pack_forget()
+                if element.Focus is True or (toplevel_form.UseDefaultFocus and not toplevel_form.FocusSet):
+                    toplevel_form.FocusSet = True
+                    element.TKEntry.focus_set()
+                if element.Disabled:
+                    element.TKEntry['state'] = 'readonly' if element.UseReadonlyForDisable else 'disabled'
+                if element.ReadOnly:
+                    element.TKEntry['state'] = 'readonly'
+
+                if element.Tooltip is not None:
+                    element.TooltipObject = ToolTip(element.TKEntry, text=element.Tooltip, timeout=DEFAULT_TOOLTIP_TIME)
+                _add_right_click_menu_and_grab(element)
+                if theme_input_text_color() not in (COLOR_SYSTEM_DEFAULT, None):
+                    element.Widget.config(insertbackground=theme_input_text_color())
+
+                # row_should_expand = True
+            
             # -------------------------  COMBO placement element  ------------------------- #
             elif element_type == ELEM_TYPE_INPUT_COMBO:
                 element = element  # type: Combo
@@ -19100,6 +20013,73 @@ def PackFormIntoFrame(form, containing_frame, toplevel_form):
                     # element.tktext_label.pack_forget()
                 if element.Tooltip is not None:
                     element.TooltipObject = ToolTip(element.tktext_label, text=element.Tooltip, timeout=DEFAULT_TOOLTIP_TIME)
+                if element.EnableEvents and element.tktext_label is not None:
+                    element.tktext_label.bind('<ButtonPress-1>', element._ClickHandler)
+
+                _add_right_click_menu_and_grab(element)
+
+            elif element_type == ELEM_TYPE_IMAGE_DND:
+                element = element  # type: Image
+                #const_tooltip = element.TKStringVar = tk.StringVar()
+                #const_tooltip = element.Tooltip
+                def handle(event, el):
+                    #el.Filename=event.data
+                    #print('link image : ', event.data)
+                    element.LinkImg = event.data
+                    return event.data
+        
+                    #print(el.Filename)
+                    #photo = tk.PhotoImage(file=event.data)
+                    #el.image = photo
+                    #element._pack_forget_save_settings()
+                    #el.image=photo
+                    #print('gef image : ', el)
+                try:
+                    if element.Filename is not None:
+                        photo = tk.PhotoImage(file=element.Filename)
+                    elif element.Data is not None:
+                        photo = tk.PhotoImage(data=element.Data)
+                    else:
+                        photo = None
+
+                    if element.ImageSubsample and photo is not None:
+                        photo = photo.subsample(element.ImageSubsample)
+                        # print('*ERROR laying out form.... Image Element has no image specified*')
+                except Exception as e:
+                    photo = None
+                    _error_popup_with_traceback('Your Window has an Image Element with a problem',
+                                                'The traceback will show you the Window with the problem layout',
+                                                'Look in this Window\'s layout for an Image element that has a key of {}'.format(element.Key),
+                                                'The error occuring is:', e)
+
+                el = element.tktext_label = element.Widget = tk.Label(tk_row_frame, bd=0)
+                element.tktext_label.drop_target_register(DND_FILES)
+                element.tktext_label.dnd_bind('<<Drop>>', lambda e: handle(e, el))
+
+
+                #print('image', element.visible)
+                if photo is not None:
+                    if element_size == (None, None) or element_size is None or element_size == toplevel_form.DefaultElementSize:
+                        width, height = photo.width(), photo.height()
+                    else:
+                        width, height = element_size
+                    
+                    element.tktext_label.config(image=photo, width=width, height=height)
+
+                if not element.BackgroundColor in (None, COLOR_SYSTEM_DEFAULT):
+                    element.tktext_label.config(background=element.BackgroundColor)
+
+                element.tktext_label.image = photo
+                # tktext_label.configure(anchor=tk.NW, image=photo)
+                expand, fill, row_should_expand, row_fill_direction = _add_expansion(element, row_should_expand, row_fill_direction)
+                element.tktext_label.pack(side=tk.LEFT, padx=elementpad[0], pady=elementpad[1], expand=expand, fill=fill)
+
+                if element.visible is False:
+                    element._pack_forget_save_settings()
+                    # element.tktext_label.pack_forget()
+                if element.Tooltip is not None:
+                    element.TooltipObject = ToolTip(element.tktext_label, text=element.Tooltip,
+                                                    timeout=DEFAULT_TOOLTIP_TIME)
                 if element.EnableEvents and element.tktext_label is not None:
                     element.tktext_label.bind('<ButtonPress-1>', element._ClickHandler)
 
@@ -19962,7 +20942,7 @@ def _get_hidden_master_root():
     # if one is already made, then skip making another
     if Window.hidden_master_root is None:
         Window._IncrementOpenCount()
-        Window.hidden_master_root = tk.Tk()
+        Window.hidden_master_root = Tk() #tk.Tk()
         Window.hidden_master_root.attributes('-alpha', 0)  # HIDE this window really really really
         # if not running_mac():
         try:
@@ -20078,7 +21058,7 @@ def StartupTK(window):
     ow = Window.NumOpenWindows
     # print('Starting TK open Windows = {}'.format(ow))
     if ENABLE_TK_WINDOWS:
-        root = tk.Tk()
+        root = Tk() #tk.Tk()
     elif not ow and not window.ForceTopLevel:
         # if first window being created, make a throwaway, hidden master root.  This stops one user
         # window from becoming the child of another user window. All windows are children of this hidden window
