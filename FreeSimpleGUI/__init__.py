@@ -36,6 +36,8 @@ from typing import Dict  # noqa
 from typing import List  # noqa
 from typing import Tuple  # noqa
 
+from  .tkdnd import TkDnD, DND_FILES
+
 
 # get the tkinter detailed version
 tclversion_detailed = tkinter.Tcl().eval('info patchlevel')
@@ -823,6 +825,9 @@ FILE_TYPES_ALL_FILES = (('ALL Files', '*.* *'),)
 BUTTON_DISABLED_MEANS_IGNORE = 'ignore'
 
 # -------------------------  Element types  ------------------------- #
+#dnd
+ELEM_TYPE_INPUT_TEXT_DND = 'dndinput'
+ELEM_TYPE_IMAGE_DND = 'dndimage'
 
 ELEM_TYPE_TEXT = 'text'
 ELEM_TYPE_INPUT_TEXT = 'input'
@@ -4100,6 +4105,13 @@ def _BuildResultsForSubform(form, initialize_only, top_level_form):
                         value = ''
                     if not top_level_form.NonBlocking and not element.do_not_clear and not top_level_form.ReturnKeyboardEvents:
                         element.TKStringVar.set('')
+                elif element.Type == ELEM_TYPE_INPUT_TEXT_DND:
+                    try:
+                        value = element.TKStringVar.get()
+                    except:
+                        value = ''
+                    if not top_level_form.NonBlocking and not element.do_not_clear and not top_level_form.ReturnKeyboardEvents:
+                        element.TKStringVar.set('')
                 elif element.Type == ELEM_TYPE_INPUT_CHECKBOX:
                     value = element.TKIntVar.get()
                     value = value != 0
@@ -4206,6 +4218,7 @@ def _BuildResultsForSubform(form, initialize_only, top_level_form):
                 ELEM_TYPE_BUTTON,
                 ELEM_TYPE_TEXT,
                 ELEM_TYPE_IMAGE,
+                ELEM_TYPE_IMAGE_DND,
                 ELEM_TYPE_OUTPUT,
                 ELEM_TYPE_PROGRESS_BAR,
                 ELEM_TYPE_COLUMN,
@@ -4313,6 +4326,10 @@ def _FindElementWithFocusInSubForm(form):
                 if matching_elem is not None:
                     return matching_elem
             elif element.Type == ELEM_TYPE_INPUT_TEXT:
+                if element.TKEntry is not None:
+                    if element.TKEntry is element.TKEntry.focus_get():
+                        return element
+            elif element.Type == ELEM_TYPE_INPUT_TEXT_DND:
                 if element.TKEntry is not None:
                     if element.TKEntry is element.TKEntry.focus_get():
                         return element
@@ -5452,6 +5469,96 @@ def PackFormIntoFrame(form, containing_frame, toplevel_form):
 
                 # row_should_expand = True
 
+            elif element_type == ELEM_TYPE_INPUT_TEXT_DND:
+                #print('entrou')
+                def drop(event, el, var_const, key):
+                    print(vars()['key'])
+                    #var_update
+                    var_const.set(event.data)
+                   
+                    #g['var_const_%s' % key].set(event.data)
+                    #el.delete(0, tk.END)
+                    #el.insert(0, event.data)
+                    #print(el, event.data)
+                    return 
+
+                def handle(event):
+                    event.widget.delete(0, tk.END)
+                    event.widget.insert(0, event.data)
+
+                element = element  # type: InputText
+                key = element.key
+
+    
+                default_text = element.DefaultText
+
+                #if element.is_dnd:
+                var_const = element.TKStringVar = tk.StringVar()
+                #else:
+                    #element.TKStringVar = tk.StringVar()
+                #element.TKStringVar = tk.StringVar()
+                element.TKStringVar.set(default_text)
+                show = element.PasswordCharacter if element.PasswordCharacter else ""
+                bd = border_depth
+                if element.Justification is not None:
+                    justification = element.Justification
+                else:
+                    justification = DEFAULT_TEXT_JUSTIFICATION
+                justify = tk.LEFT if justification.startswith('l') else tk.CENTER if justification.startswith('c') else tk.RIGHT
+                # anchor = tk.NW if justification == 'left' else tk.N if justification == 'center' else tk.NE
+            
+                el = element.TKEntry = element.Widget = tk.Entry(tk_row_frame, width=element_size[0],
+                                                            textvariable=var_const, bd=bd,
+                                                            font=font, show=show, justify=justify)
+                #print(str(key))
+                #vars()[str(key)] = el
+                if element.ChangeSubmits:
+                    #print(element.is_dnd, element)
+                    element.TKEntry.bind('<Key>', element._KeyboardHandler)
+                    element.TKEntry.drop_target_register(DND_FILES)
+                    #element.TKEntry.dnd_bind(el, handle, 'text/uri-list')
+                    #element.TKEntry.dnd_bind('<<Drop>>', lambda e: drop(e, el, var_const, element._KeyboardHandler))
+                    element.TKEntry.dnd_bind('<<Drop>>', lambda e: handle(e))
+                    #element.TKEntry.dnd_bind('<Return>', element._ReturnKeyHandler)
+                    
+                element.TKEntry.bind('<Return>', element._ReturnKeyHandler)
+                element.TKEntry.dnd_bind('<Return>', element._ReturnKeyHandler)
+            
+                
+
+                if element.BackgroundColor is not None and element.BackgroundColor != COLOR_SYSTEM_DEFAULT:
+                    element.TKEntry.configure(background=element.BackgroundColor, selectforeground=element.BackgroundColor)
+                if text_color is not None and text_color != COLOR_SYSTEM_DEFAULT:
+                    element.TKEntry.configure(fg=text_color, selectbackground=text_color)
+
+                if element.disabled_readonly_background_color is not None:
+                    element.TKEntry.config(readonlybackground=element.disabled_readonly_background_color)
+                if element.disabled_readonly_text_color is not None:
+                    element.TKEntry.config(fg=element.disabled_readonly_text_color)
+
+                element.Widget.config(highlightthickness=0)
+                # element.pack_keywords = {'side':tk.LEFT, 'padx':elementpad[0], 'pady':elementpad[1], 'expand':False, 'fill':tk.NONE }
+                # element.TKEntry.pack(**element.pack_keywords)
+                expand, fill, row_should_expand, row_fill_direction = _add_expansion(element, row_should_expand, row_fill_direction)
+                element.TKEntry.pack(side=tk.LEFT, padx=elementpad[0], pady=elementpad[1], expand=expand, fill=fill)
+                if element.visible is False:
+                    element._pack_forget_save_settings()
+                    # element.TKEntry.pack_forget()
+                if element.Focus is True or (toplevel_form.UseDefaultFocus and not toplevel_form.FocusSet):
+                    toplevel_form.FocusSet = True
+                    element.TKEntry.focus_set()
+                if element.Disabled:
+                    element.TKEntry['state'] = 'readonly' if element.UseReadonlyForDisable else 'disabled'
+                if element.ReadOnly:
+                    element.TKEntry['state'] = 'readonly'
+
+                if element.Tooltip is not None:
+                    element.TooltipObject = ToolTip(element.TKEntry, text=element.Tooltip, timeout=DEFAULT_TOOLTIP_TIME)
+                _add_right_click_menu_and_grab(element)
+                if theme_input_text_color() not in (COLOR_SYSTEM_DEFAULT, None):
+                    element.Widget.config(insertbackground=theme_input_text_color())
+
+                # row_should_expand = True
             # -------------------------  COMBO placement element  ------------------------- #
             elif element_type == ELEM_TYPE_INPUT_COMBO:
                 element = element  # type: Combo
@@ -5997,6 +6104,73 @@ def PackFormIntoFrame(form, containing_frame, toplevel_form):
                 _add_right_click_menu_and_grab(element)
 
                 # -------------------------  Canvas placement element  ------------------------- #
+            elif element_type == ELEM_TYPE_IMAGE_DND:
+                element = element  # type: Image
+                #const_tooltip = element.TKStringVar = tk.StringVar()
+                #const_tooltip = element.Tooltip
+                def handle(event, el):
+                    #el.Filename=event.data
+                    #print('link image : ', event.data)
+                    element.LinkImg = event.data
+                    return event.data
+        
+                    #print(el.Filename)
+                    #photo = tk.PhotoImage(file=event.data)
+                    #el.image = photo
+                    #element._pack_forget_save_settings()
+                    #el.image=photo
+                    #print('gef image : ', el)
+                try:
+                    if element.Filename is not None:
+                        photo = tk.PhotoImage(file=element.Filename)
+                    elif element.Data is not None:
+                        photo = tk.PhotoImage(data=element.Data)
+                    else:
+                        photo = None
+
+                    if element.ImageSubsample and photo is not None:
+                        photo = photo.subsample(element.ImageSubsample)
+                        # print('*ERROR laying out form.... Image Element has no image specified*')
+                except Exception as e:
+                    photo = None
+                    _error_popup_with_traceback('Your Window has an Image Element with a problem',
+                                                'The traceback will show you the Window with the problem layout',
+                                                'Look in this Window\'s layout for an Image element that has a key of {}'.format(element.Key),
+                                                'The error occuring is:', e)
+
+                el = element.tktext_label = element.Widget = tk.Label(tk_row_frame, bd=0)
+                element.tktext_label.drop_target_register(DND_FILES)
+                element.tktext_label.dnd_bind('<<Drop>>', lambda e: handle(e, el))
+
+
+                #print('image', element.visible)
+                if photo is not None:
+                    if element_size == (None, None) or element_size is None or element_size == toplevel_form.DefaultElementSize:
+                        width, height = photo.width(), photo.height()
+                    else:
+                        width, height = element_size
+                    
+                    element.tktext_label.config(image=photo, width=width, height=height)
+
+                if not element.BackgroundColor in (None, COLOR_SYSTEM_DEFAULT):
+                    element.tktext_label.config(background=element.BackgroundColor)
+
+                element.tktext_label.image = photo
+                # tktext_label.configure(anchor=tk.NW, image=photo)
+                expand, fill, row_should_expand, row_fill_direction = _add_expansion(element, row_should_expand, row_fill_direction)
+                element.tktext_label.pack(side=tk.LEFT, padx=elementpad[0], pady=elementpad[1], expand=expand, fill=fill)
+
+                if element.visible is False:
+                    element._pack_forget_save_settings()
+                    # element.tktext_label.pack_forget()
+                if element.Tooltip is not None:
+                    element.TooltipObject = ToolTip(element.tktext_label, text=element.Tooltip,
+                                                    timeout=DEFAULT_TOOLTIP_TIME)
+                if element.EnableEvents and element.tktext_label is not None:
+                    element.tktext_label.bind('<ButtonPress-1>', element._ClickHandler)
+
+                _add_right_click_menu_and_grab(element)  
+			
             elif element_type == ELEM_TYPE_CANVAS:
                 element = element  # type: Canvas
                 width, height = element_size
@@ -6853,7 +7027,7 @@ def _get_hidden_master_root():
     # if one is already made, then skip making another
     if Window.hidden_master_root is None:
         Window._IncrementOpenCount()
-        Window.hidden_master_root = tk.Tk()
+        Window.hidden_master_root = TkDnD() #tk.Tk()
         Window.hidden_master_root.attributes('-alpha', 0)  # HIDE this window really really really
         # if not running_mac():
         try:
@@ -6969,7 +7143,7 @@ def StartupTK(window):
     ow = Window.NumOpenWindows
     # print('Starting TK open Windows = {}'.format(ow))
     if ENABLE_TK_WINDOWS:
-        root = tk.Tk()
+        root = TkDnD() #tk.Tk()
     elif not ow and not window.ForceTopLevel:
         # if first window being created, make a throwaway, hidden master root.  This stops one user
         # window from becoming the child of another user window. All windows are children of this hidden window
@@ -16386,6 +16560,9 @@ if _mac_should_set_alpha_to_99():
     # Applyting Mac OS 12.3+ Alpha Channel fix.  Sets the default Alpha Channel to 0.99
     set_options(alpha_channel=0.99)
 
+#dnd
+from FreeSimpleGUI.elements.dnd_image import DnDImage
+from FreeSimpleGUI.elements.dnd_input import DnDInput
 
 from FreeSimpleGUI.elements.base import Element
 from FreeSimpleGUI.elements.button import Button
@@ -16431,6 +16608,12 @@ from FreeSimpleGUI.window import Window
 from FreeSimpleGUI._utils import _error_popup_with_traceback
 
 # Element aliases
+#dnd
+InDnD = DnDInput
+InputTextDnD = InDnD
+IDnD = InDnD
+ImDnD = DnDImage
+
 In = Input
 InputText = Input
 I = Input  # noqa
